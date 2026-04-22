@@ -1,0 +1,7 @@
+# Smart Classroom AI — Phase 1 Dependencies
+# Install with: pip install -r requirements.txt
+
+flask>=3.0.0
+opencv-python>=4.9.0
+mediapipe>=0.10.0
+numpy>=1.26.0
