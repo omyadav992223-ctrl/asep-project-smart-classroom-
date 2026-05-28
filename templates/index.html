@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Smart Classroom AI — Research Dashboard</title>
-  <meta name="description" content="Real-time biometric telemetry dashboard for classroom research." />
+  <title>Smart Classroom AI — Teacher Command Center</title>
+  <meta name="description" content="Real-time classroom analytics and automated attendance for teachers." />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet" />
@@ -13,87 +13,131 @@
 </head>
 <body>
 
-  <!-- ── Header ──────────────────────────────────────────── -->
+  <!-- ── Header ─────────────────────────────────────────────── -->
   <header id="app-header">
-    <div class="header-title">
-      <h1>SMART CLASSROOM AI // BIOMETRIC TELEMETRY</h1>
+    <div class="header-left">
+      <h1>SMART CLASSROOM AI <span class="header-divider">//</span> TEACHER COMMAND CENTER</h1>
+    </div>
+    <div class="header-right">
+      <div class="header-badge" id="present-badge">
+        <span class="badge-icon">👥</span>
+        <span id="badge-count">0</span>
+        <span class="badge-label">PRESENT</span>
+      </div>
+      <div class="header-badge" id="faces-badge">
+        <span class="badge-icon">👁</span>
+        <span id="badge-faces">0</span>
+        <span class="badge-label">DETECTED</span>
+      </div>
+      <!-- Phone alert badge: hidden until an alert fires -->
+      <div class="header-badge" id="phone-badge" style="display:none;border-color:rgba(239,68,68,0.5);color:#ef4444">
+        <span class="badge-icon">📱</span>
+        <span id="badge-phone">0</span>
+        <span class="badge-label">PHONE</span>
+      </div>
+      <div class="session-timer">
+        <span class="badge-icon">⏱</span>
+        <span id="session-clock">00:00:00</span>
+      </div>
+      <div class="gear-menu">
+        <button id="btn-gear" aria-label="Settings">⚙️</button>
+        <div id="dropdown-menu" class="dropdown-content hidden">
+          <button id="btn-report">📋 Session Report</button>
+          <button id="btn-export">⬇ Export CSV</button>
+          <button id="btn-export-r">⬇ Export JSON</button>
+          <hr>
+          <button id="btn-reset" class="danger">↺ Reset Session</button>
+        </div>
+      </div>
     </div>
   </header>
 
-  <!-- ── Main Layout: Bento Grid ──────────────────────────── -->
+  <!-- ── Main Layout ────────────────────────────────────────── -->
   <main id="bento-grid">
 
-    <!-- Tile A: Webcam Feed (Top-Left 40%) -->
+    <!-- Tile A: Live Camera Feed (top-left) -->
     <div class="bento-card" id="tile-camera">
-      <div class="card-header">LIVE FEED <span id="val-fps" class="small-mono">— FPS</span></div>
+      <div class="card-header">
+        LIVE FEED
+        <span id="val-fps" class="small-mono">— FPS</span>
+      </div>
       <div id="video-wrapper">
-        <img id="video-stream" src="/video_feed" alt="Live webcam feed" draggable="false" />
+        <img id="video-stream" src="/video_feed" alt="Live classroom feed" draggable="false" />
+        <!-- face count overlay -->
+        <div id="face-overlay-badge">
+          <span id="overlay-face-count">0</span> FACES
+        </div>
       </div>
     </div>
 
-    <!-- Tile B: Focus Telemetry Chart (Top-Right 60%) -->
+    <!-- Tile B: Class Focus Timeline (top-right top half) -->
     <div class="bento-card" id="tile-chart">
-      <div class="card-header">FOCUS TELEMETRY <span id="val-score" class="small-mono">0%</span></div>
+      <div class="card-header">
+        CLASS FOCUS TIMELINE
+        <span id="val-score" class="small-mono">0%</span>
+      </div>
       <div id="chart-wrapper">
-        <canvas id="focus-chart" aria-label="Real-time focus score area chart"></canvas>
+        <canvas id="focus-chart" aria-label="Class average focus score over time"></canvas>
       </div>
     </div>
 
-    <!-- Bottom Row: 4 Smaller Cards -->
-    <div id="bottom-row">
-      <!-- Card 1: Blink Rate & Settings -->
-      <div class="bento-card small-card" id="card-blink">
-        <div class="card-header">
-          BLINK RATE (EAR)
-          <div class="gear-menu">
-            <button id="btn-gear" aria-label="Settings">⚙️</button>
-            <div id="dropdown-menu" class="dropdown-content hidden">
-              <button id="btn-report">📋 Report</button>
-              <button id="btn-export">⬇ CSV</button>
-              <button id="btn-export-r">⬇ JSON</button>
-              <hr>
-              <button id="btn-reset" class="danger">↺ Reset</button>
-            </div>
-          </div>
+    <!-- Tile C: Live Attendance Roster (top-right bottom half) -->
+    <div class="bento-card" id="tile-roster">
+      <div class="card-header">
+        LIVE ATTENDANCE LOG
+        <span class="small-mono" id="roster-count">0 students</span>
+      </div>
+      <div id="roster-body">
+        <div id="roster-empty" class="roster-placeholder">
+          <span>Waiting for students to be recognised…</span>
         </div>
+        <ul id="roster-list"></ul>
+      </div>
+    </div>
+
+    <!-- Bottom Row: 4 stat cards -->
+    <div id="bottom-row">
+
+      <!-- Card 1: Students Present -->
+      <div class="bento-card small-card" id="card-present">
+        <div class="card-header">STUDENTS PRESENT</div>
         <div class="card-value-wrap">
-          <span class="live-value" id="val-ear">—</span>
+          <span class="live-value" id="val-present">0</span>
         </div>
       </div>
 
-      <!-- Card 2: Emotion -->
+      <!-- Card 2: Room Dominant Emotion -->
       <div class="bento-card small-card" id="card-emotion">
-        <div class="card-header">EMOTION</div>
+        <div class="card-header">ROOM EMOTION</div>
         <div class="card-value-wrap">
           <span class="live-value" id="val-emotion">—</span>
         </div>
       </div>
 
-      <!-- Card 3: Gaze Direction -->
+      <!-- Card 3: Gaze Compliance -->
       <div class="bento-card small-card" id="card-gaze">
-        <div class="card-header">GAZE DIRECTION</div>
+        <div class="card-header">GAZE STATUS</div>
         <div class="card-value-wrap">
           <span class="live-value" id="val-gaze">—</span>
         </div>
       </div>
 
-      <!-- Card 4: Boredom Bar -->
+      <!-- Card 4: Room Boredom -->
       <div class="bento-card small-card" id="card-boredom">
-        <div class="card-header">BOREDOM LEVEL</div>
-        <div class="card-value-wrap" style="flex-direction: column; align-items: stretch; justify-content: center; gap: 8px; width: 100%;">
-          <div style="text-align: center;"><span class="live-value" id="val-boredom">0%</span></div>
-          <div id="boredom-bar-wrapper">
-            <div id="boredom-bar-fill"></div>
-          </div>
+        <div class="card-header">ROOM BOREDOM</div>
+        <div class="card-value-wrap" style="flex-direction:column;align-items:stretch;justify-content:center;gap:8px;width:100%">
+          <div style="text-align:center"><span class="live-value" id="val-boredom">0%</span></div>
+          <div id="boredom-bar-wrapper"><div id="boredom-bar-fill"></div></div>
         </div>
       </div>
-    </div>
+
+    </div><!-- /bottom-row -->
 
   </main>
 
   <div id="toast" role="status" aria-live="polite"></div>
 
-  <!-- ── Report Modal ──────────────────────────────────────── -->
+  <!-- ── Session Report Modal ───────────────────────────────── -->
   <div id="report-modal" class="modal-backdrop hidden" hidden>
     <div class="modal-box" role="dialog" aria-modal="true" aria-label="Session Report">
       <div class="modal-header">

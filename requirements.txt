@@ -1,7 +1,10 @@
-# Smart Classroom AI — Phase 1 Dependencies
-# Install with: pip install -r requirements.txt
+# Smart Classroom AI — Phase 2 Dependencies
+# Install with: python -m pip install -r requirements.txt
 
 flask>=3.0.0
-opencv-python>=4.9.0
-mediapipe>=0.10.0
 numpy>=1.26.0
+mediapipe>=0.10.0
+
+# Face recognition uses the LBPH recognizer built into opencv-contrib-python.
+# NO dlib / cmake / C++ build tools required.
+opencv-contrib-python>=4.9.0

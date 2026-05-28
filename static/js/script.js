@@ -1,312 +1,443 @@
 /**
- * script.js  --  Smart Classroom AI Dashboard
- * Electric Cyan Bento Box Layout
+ * Smart Classroom AI — Teacher Command Center
+ * script.js v3.0.0
+ *
+ * Responsibilities:
+ *  1. Poll /data_stream (SSE) → update aggregate classroom metrics
+ *  2. Poll /attendance_live  → update live attendance roster panel
+ *  3. Drive Chart.js with rolling class-average focus baseline
+ *  4. Session timer
+ *  5. Report modal with attendance table + focus analytics
+ *  6. Gear menu: export CSV / JSON / report / reset
  */
 
-"use strict";
+'use strict';
 
-const dom = {
-  // Chart values
-  score      : document.getElementById("val-score"),
-  scoreBar   : document.getElementById("score-bar-fill"),
-  
-  // Video metrics
-  fps        : document.getElementById("val-fps"),
-  
-  // Bento Cards
-  ear        : document.getElementById("val-ear"),
-  emotion    : document.getElementById("val-emotion"),
-  gaze       : document.getElementById("val-gaze"),
-  boredom    : document.getElementById("val-boredom"),
-  boredomBar : document.getElementById("boredom-bar-fill"),
+/* ══════════════════════════════════════════════════════════════
+   DOM refs
+   ══════════════════════════════════════════════════════════════ */
+const $ = id => document.getElementById(id);
 
-  toast      : document.getElementById("toast"),
+const elFps        = $('val-fps');
+const elScore      = $('val-score');
+const elEmotion    = $('val-emotion');
+const elGaze       = $('val-gaze');
+const elBoredom    = $('val-boredom');
+const elBoredomBar = $('boredom-bar-fill');
+const elPresent    = $('val-present');
+const elBadgeCount = $('badge-count');
+const elBadgeFaces = $('badge-faces');
+const elFaceCount  = $('overlay-face-count');
+const elClock      = $('session-clock');
+const elRosterList = $('roster-list');
+const elRosterEmpty= $('roster-empty');
+const elRosterCount= $('roster-count');
+const elPhoneAlerts= $('badge-phone');   // phone-alert badge (may be null until DOM ready)
 
-  // Buttons inside Gear menu
-  btnGear    : document.getElementById("btn-gear"),
-  dropdown   : document.getElementById("dropdown-menu"),
-  btnReport  : document.getElementById("btn-report"),
-  btnExport  : document.getElementById("btn-export"),
-  btnExportR : document.getElementById("btn-export-r"),
-  btnReset   : document.getElementById("btn-reset"),
-
-  modal      : document.getElementById("report-modal"),
-  modalBody  : document.getElementById("modal-body"),
-  modalClose : document.getElementById("modal-close"),
-};
-
-// Toggle Gear Menu
-dom.btnGear.addEventListener("click", (e) => {
-  e.stopPropagation();
-  dom.dropdown.classList.toggle("hidden");
-});
-document.addEventListener("click", (e) => {
-  if (!dom.dropdown.contains(e.target) && e.target !== dom.btnGear) {
-    dom.dropdown.classList.add("hidden");
-  }
-});
-
-// ---------------------------------------------------------------------------
-// Chart.js  --  Focus Score Graph
-// ---------------------------------------------------------------------------
+/* ══════════════════════════════════════════════════════════════
+   Chart.js — Class Focus Timeline
+   ══════════════════════════════════════════════════════════════ */
 const MAX_POINTS = 60;
-const chartCtx  = document.getElementById("focus-chart").getContext("2d");
-const CYAN_COLOR = "#06b6d4";
-const CYAN_BG = "rgba(6, 182, 212, 0.15)";
-const CYAN_GLOW = "rgba(6, 182, 212, 0.4)";
 
-const chartData = {
-  labels  : [],
-  datasets: [
-    {
-      label          : "Focus Score %",
+const focusChart = new Chart($('focus-chart').getContext('2d'), {
+  type: 'line',
+  data: {
+    labels  : [],
+    datasets: [{
+      label          : 'Class Avg Focus',
       data           : [],
-      pointRadius    : [],
-      pointBackgroundColor: [],
-      borderColor    : CYAN_COLOR,
-      backgroundColor: CYAN_BG,
+      borderColor    : '#06b6d4',
+      backgroundColor: 'rgba(6,182,212,0.08)',
       borderWidth    : 2,
-      tension        : 0.40,
-      fill           : true,
-    },
-    {
-      label          : "Session Average %",
-      data           : [],
-      borderColor    : "rgba(255,255,255,0.3)",
-      backgroundColor: "transparent",
-      borderWidth    : 1.5,
-      tension        : 0.40,
       pointRadius    : 0,
-      borderDash     : [5, 4],
-      fill           : false,
-    },
-  ],
-};
-
-const focusChart = new Chart(chartCtx, {
-  type   : "line",
-  data   : chartData,
+      tension        : 0.4,
+      fill           : true,
+    }],
+  },
   options: {
-    animation          : false,
-    responsive         : true,
+    responsive        : true,
     maintainAspectRatio: false,
-    interaction        : { mode: "index", intersect: false },
+    animation         : false,
     plugins: {
       legend: { display: false },
       tooltip: {
-        backgroundColor: "#0f172a",
-        titleColor     : "#f8fafc",
-        bodyColor      : "#94a3b8",
-        borderColor    : "rgba(255,255,255,0.1)",
-        borderWidth    : 1,
-        padding        : 10,
         callbacks: {
-          label: ctx => ` ${ctx.dataset.label}: ${ctx.parsed.y.toFixed(1)}%`,
-        },
-      },
+          label: ctx => ` Focus: ${ctx.parsed.y.toFixed(1)}%`
+        }
+      }
     },
     scales: {
       x: {
-        ticks: { color: "#64748b", maxTicksLimit: 8, font: { size: 10, family: "'JetBrains Mono', monospace" } },
-        grid : { color: "rgba(255,255,255,0.05)" },
-        border: { color: "transparent" },
+        ticks: { color: '#4a5280', font: { family: 'JetBrains Mono', size: 10 },
+                 maxTicksLimit: 8 },
+        grid : { color: 'rgba(255,255,255,0.03)' },
       },
       y: {
         min  : 0,
         max  : 100,
-        ticks: { color: "#64748b", stepSize: 25, font: { family: "'JetBrains Mono', monospace" } },
-        grid : { color: "rgba(255,255,255,0.05)" },
-        border: { color: "transparent" },
+        ticks: { color: '#4a5280', font: { family: 'JetBrains Mono', size: 10 },
+                 callback: v => v + '%' },
+        grid : { color: 'rgba(255,255,255,0.05)' },
       },
     },
   },
 });
 
-const scoreHistory = [];
+function pushChartPoint(focusScore) {
+  const now    = new Date();
+  const label  = `${String(now.getMinutes()).padStart(2,'0')}:${String(now.getSeconds()).padStart(2,'0')}`;
+  const ds     = focusChart.data;
 
-function pushChart(score, state) {
-  const timeLabel = new Date().toLocaleTimeString("en", { hour12: false });
-  scoreHistory.push(score);
-  if (scoreHistory.length > MAX_POINTS) scoreHistory.shift();
-  const avg = scoreHistory.reduce((a, b) => a + b, 0) / scoreHistory.length;
+  ds.labels.push(label);
+  ds.datasets[0].data.push(focusScore);
 
-  chartData.labels.push(timeLabel);
-  chartData.datasets[0].data.push(score);
-  chartData.datasets[1].data.push(parseFloat(avg.toFixed(1)));
-  
-  if (state === "PHONE SUSPECTED") {
-      chartData.datasets[0].pointRadius.push(6);
-      chartData.datasets[0].pointBackgroundColor.push("#FF0000");
-  } else {
-      chartData.datasets[0].pointRadius.push(0);
-      chartData.datasets[0].pointBackgroundColor.push("transparent");
+  if (ds.labels.length > MAX_POINTS) {
+    ds.labels.shift();
+    ds.datasets[0].data.shift();
   }
 
-  if (chartData.labels.length > MAX_POINTS) {
-    chartData.labels.shift();
-    chartData.datasets[0].data.shift();
-    chartData.datasets[1].data.shift();
-    chartData.datasets[0].pointRadius.shift();
-    chartData.datasets[0].pointBackgroundColor.shift();
+  // Colour the line based on the mean focus of the visible window
+  const vis  = ds.datasets[0].data;
+  const mean = vis.reduce((a, b) => a + b, 0) / vis.length;
+  ds.datasets[0].borderColor     = mean >= 60 ? '#06b6d4' : '#f59e0b';
+  ds.datasets[0].backgroundColor = mean >= 60 ? 'rgba(6,182,212,0.08)' : 'rgba(245,158,11,0.08)';
+
+  focusChart.update('none');
+}
+
+/* ══════════════════════════════════════════════════════════════
+   Session Clock
+   ══════════════════════════════════════════════════════════════ */
+const _sessionStart = Date.now();
+
+function tickClock() {
+  const elapsed = Math.floor((Date.now() - _sessionStart) / 1000);
+  const h = String(Math.floor(elapsed / 3600)).padStart(2, '0');
+  const m = String(Math.floor((elapsed % 3600) / 60)).padStart(2, '0');
+  const s = String(elapsed % 60).padStart(2, '0');
+  elClock.textContent = `${h}:${m}:${s}`;
+}
+setInterval(tickClock, 1000);
+
+/* ══════════════════════════════════════════════════════════════
+   SSE — /data_stream (classroom aggregate metrics)
+   ══════════════════════════════════════════════════════════════ */
+let _lastFocusPush    = 0;
+let _phoneAlertShown  = false;   // prevents toast spam
+
+function connectStream() {
+  const es = new EventSource('/data_stream');
+
+  es.addEventListener('metrics', e => {
+    try {
+      const m = JSON.parse(e.data);
+      applyMetrics(m);
+    } catch (_) { /* ignore malformed events */ }
+  });
+
+  es.onerror = () => {
+    es.close();
+    setTimeout(connectStream, 3000);
+  };
+}
+
+function applyMetrics(m) {
+  /* FPS */
+  elFps.textContent = `${m.fps?.toFixed(1) ?? '—'} FPS`;
+
+  /* Class average focus */
+  const focus = m.focus_score ?? 0;
+  elScore.textContent = `${focus.toFixed(1)}%`;
+
+  /* Push to chart every ~2 s */
+  const now = Date.now();
+  if (now - _lastFocusPush > 2000) {
+    pushChartPoint(focus);
+    _lastFocusPush = now;
   }
-  focusChart.update("none");
-}
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-function fmt(v, dp = 2, unit = "") {
-  return (v == null) ? "—" : Number(v).toFixed(dp) + unit;
-}
+  /* Face count badges */
+  const fc = m.face_count ?? 0;
+  elFaceCount.textContent = fc;
+  elBadgeFaces.textContent = fc;
 
-let toastTimeout;
-function showToast(msg, type = "info", ms = 3000) {
-  dom.toast.textContent = msg;
-  dom.toast.className = `show ${type}`;
-  clearTimeout(toastTimeout);
-  if (type !== "info") {
-    toastTimeout = setTimeout(() => { dom.toast.className = ""; }, ms);
-  }
-}
+  /* Dominant emotion */
+  elEmotion.textContent = m.emotion ?? '—';
 
-// ---------------------------------------------------------------------------
-// Main poll
-// ---------------------------------------------------------------------------
-async function poll() {
-  try {
-    const resp = await fetch("/data_stream", { cache: "no-store" });
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-    const d = await resp.json();
+  /* Gaze status */
+  const gazeState = m.gaze_state ?? m.gaze ?? '—';
+  elGaze.textContent = gazeState;
+  elGaze.className   = 'live-value' +
+    (gazeState === 'Centered' ? ' gaze-centered' : ' gaze-distracted');
 
-    // FPS
-    dom.fps.textContent = fmt(d.fps, 1, " FPS");
+  /* Room boredom */
+  const bPct = ((m.boredom ?? 0) * 100);
+  elBoredom.textContent = `${bPct.toFixed(0)}%`;
+  elBoredomBar.style.width      = `${Math.min(bPct, 100)}%`;
+  elBoredomBar.style.background = bPct > 60
+    ? '#ef4444'
+    : bPct > 35 ? '#f59e0b' : '#06b6d4';
 
-    // Chart
-    const score = d.focus_score ?? 0;
-    const state = d.gaze_state || "N/A";
-    dom.score.textContent = fmt(score, 0, "%");
-    pushChart(score, state);
-
-    // Emotion
-    dom.emotion.textContent = d.emotion || "—";
-
-    // Cards
-    dom.ear.textContent = d.ear ? fmt(d.ear, 2) : "—";
-    
-    // Gaze Direction
-    if (state === "Centered") {
-      dom.gaze.textContent = "Optimal";
-      dom.gaze.className = "live-value gaze-centered";
-    } else if (state === "PHONE SUSPECTED") {
-      dom.gaze.textContent = "PHONE SUSPECTED";
-      dom.gaze.className = "live-value gaze-distracted";
-    } else if (state === "Looking Away") {
-      dom.gaze.textContent = "Looking Away";
-      dom.gaze.className = "live-value gaze-distracted";
-    } else {
-      dom.gaze.textContent = "—";
-      dom.gaze.className = "live-value";
+  /* Phone alerts */
+  const alerts = m.phone_alerts ?? 0;
+  if (elPhoneAlerts) {
+    elPhoneAlerts.textContent = alerts;
+    const badge = elPhoneAlerts.closest('.header-badge');
+    if (badge) {
+      badge.style.display = alerts > 0 ? 'flex' : 'none';
     }
+  }
+  // One-shot toast when alert fires
+  if (alerts > 0 && !_phoneAlertShown) {
+    _phoneAlertShown = true;
+    showToast(`⚠️ ${alerts} student${alerts > 1 ? 's' : ''} using phone!`, 'error');
+  } else if (alerts === 0) {
+    _phoneAlertShown = false;
+  }
+}
 
-    // Boredom
-    const boredomPct = Math.max(0, Math.min(100, (d.boredom || 0) * 100));
-    dom.boredom.textContent = fmt(boredomPct, 0, "%");
-    dom.boredomBar.style.width = boredomPct + "%";
+connectStream();
+
+/* ══════════════════════════════════════════════════════════════
+   Attendance Roster Poll — /attendance_live every 3 s
+   ══════════════════════════════════════════════════════════════ */
+const _knownPrns = new Set();   // track who we've already added to DOM
+
+async function pollAttendance() {
+  try {
+    const res  = await fetch('/attendance_live');
+    const data = await res.json();
+
+    const students = data.students ?? [];
+    const total    = data.total_present ?? 0;
+
+    /* Update header badge & bottom card */
+    elBadgeCount.textContent = total;
+    elPresent.textContent    = total;
+    elRosterCount.textContent = `${total} student${total !== 1 ? 's' : ''}`;
+
+    /* Show / hide empty placeholder */
+    elRosterEmpty.style.display = total === 0 ? 'flex' : 'none';
+
+    /* Append new entries (do NOT rebuild from scratch → no flicker) */
+    students.forEach(s => {
+      if (_knownPrns.has(s.prn)) return;   // already rendered
+      _knownPrns.add(s.prn);
+
+      const li = document.createElement('li');
+      li.className = 'roster-entry';
+      li.id        = `roster-${s.prn}`;
+
+      const [datePart, timePart] = (s.marked_at ?? '').split(' ');
+      const displayTime = timePart ?? s.marked_at ?? '';
+
+      li.innerHTML = `
+        <div class="roster-dot"></div>
+        <span class="roster-name">${escHtml(s.name)}</span>
+        <span class="roster-prn">${escHtml(s.prn)}</span>
+        <span class="roster-time">${escHtml(displayTime)}</span>
+      `;
+      elRosterList.prepend(li);   // newest at top
+    });
 
   } catch (err) {
-    // console.warn("[poll connection]", err.message);
+    console.warn('[attendance] Poll failed:', err);
   }
 }
 
-// ---------------------------------------------------------------------------
-// Modals and Reporting
-// ---------------------------------------------------------------------------
-function renderReport(data) {
-  if (data.error) {
-    dom.modalBody.innerHTML = `<p class="modal-loading">${data.error}</p>`;
+function escHtml(str) {
+  return String(str)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+pollAttendance();
+setInterval(pollAttendance, 3000);
+
+/* ══════════════════════════════════════════════════════════════
+   Gear menu toggle
+   ══════════════════════════════════════════════════════════════ */
+const btnGear    = $('btn-gear');
+const dropMenu   = $('dropdown-menu');
+
+btnGear.addEventListener('click', e => {
+  e.stopPropagation();
+  dropMenu.classList.toggle('hidden');
+});
+document.addEventListener('click', () => dropMenu.classList.add('hidden'));
+
+/* ══════════════════════════════════════════════════════════════
+   Toast helper
+   ══════════════════════════════════════════════════════════════ */
+const toastEl = $('toast');
+let _toastTimer;
+
+function showToast(msg, type = 'info') {
+  toastEl.textContent = msg;
+  toastEl.className   = `show ${type}`;
+  clearTimeout(_toastTimer);
+  _toastTimer = setTimeout(() => toastEl.classList.remove('show'), 3500);
+}
+
+/* ══════════════════════════════════════════════════════════════
+   Export / Reset buttons
+   ══════════════════════════════════════════════════════════════ */
+$('btn-export').addEventListener('click', async () => {
+  dropMenu.classList.add('hidden');
+  try {
+    const r = await fetch('/export_session', { method: 'POST' });
+    const d = await r.json();
+    showToast(`CSV saved: ${d.path}`, 'success');
+  } catch { showToast('Export failed.', 'error'); }
+});
+
+$('btn-export-r').addEventListener('click', async () => {
+  dropMenu.classList.add('hidden');
+  try {
+    const r = await fetch('/export_report', { method: 'POST' });
+    const d = await r.json();
+    showToast(`JSON saved: ${d.path}`, 'success');
+  } catch { showToast('Export failed.', 'error'); }
+});
+
+$('btn-reset').addEventListener('click', async () => {
+  dropMenu.classList.add('hidden');
+  if (!confirm('Reset session? All in-memory logs will be cleared.')) return;
+  try {
+    await fetch('/reset_session', { method: 'POST' });
+    /* Clear chart */
+    focusChart.data.labels = [];
+    focusChart.data.datasets[0].data = [];
+    focusChart.update('none');
+    /* Clear roster */
+    _knownPrns.clear();
+    elRosterList.innerHTML = '';
+    elRosterEmpty.style.display = 'flex';
+    elBadgeCount.textContent = 0;
+    elPresent.textContent = 0;
+    elRosterCount.textContent = '0 students';
+    showToast('Session reset.', 'info');
+  } catch { showToast('Reset failed.', 'error'); }
+});
+
+/* ══════════════════════════════════════════════════════════════
+   Session Report Modal
+   ══════════════════════════════════════════════════════════════ */
+const modal      = $('report-modal');
+const modalBody  = $('modal-body');
+const btnReport  = $('btn-report');
+const btnClose   = $('modal-close');
+
+btnReport.addEventListener('click', () => {
+  dropMenu.classList.add('hidden');
+  openModal();
+});
+btnClose.addEventListener('click', closeModal);
+modal.addEventListener('click', e => { if (e.target === modal) closeModal(); });
+
+function openModal() {
+  modal.hidden = false;
+  modal.classList.remove('hidden');
+  modalBody.innerHTML = '<p class="modal-loading">Loading report…</p>';
+  fetchReport();
+}
+function closeModal() {
+  modal.classList.add('hidden');
+  modal.hidden = true;
+}
+
+async function fetchReport() {
+  try {
+    const res  = await fetch('/session_report');
+    const data = await res.json();
+    renderReport(data);
+  } catch {
+    modalBody.innerHTML = '<p style="color:#ef4444">Failed to load report.</p>';
+  }
+}
+
+function renderReport(d) {
+  if (d.error) {
+    modalBody.innerHTML = `<p style="color:#f59e0b">${escHtml(d.error)}</p>`;
     return;
   }
-  const f = data.focus || {};
-  const e = data.emotion || {};
-  const g = data.gaze_distribution || {};
-  const b = data.boredom || {};
 
-  const distRows = Object.entries(e.distribution || {})
-    .sort((a, b) => b[1] - a[1])
-    .map(([k, v]) => `<tr><td>${k}</td><td>${v}%</td></tr>`).join("");
+  const f = d.focus ?? {};
+  const e = d.emotion ?? {};
+  const b = d.boredom ?? {};
+  const att = d.attendance ?? {};
+  const gazeKeys = Object.keys(d.gaze_distribution ?? {});
 
-  const gazeRows = Object.entries(g)
-    .map(([k, v]) => `<tr><td>${k}</td><td>${v}%</td></tr>`).join("");
+  /* Attendance rows */
+  const attStudents = att.students ?? [];
+  const attRows = attStudents.length
+    ? attStudents.map(s => `
+        <tr>
+          <td>${escHtml(s.name)}</td>
+          <td style="font-family:monospace;color:#8891c0">${escHtml(s.prn)}</td>
+          <td><span class="attendance-badge">✓ Present</span></td>
+          <td style="font-family:monospace;font-size:0.72rem;color:#4a5280">${escHtml(s.marked_at)}</td>
+        </tr>`).join('')
+    : `<tr><td colspan="4" style="text-align:center;color:#4a5280;padding:16px">
+         No students identified this session.
+       </td></tr>`;
 
-  dom.modalBody.innerHTML = `
+  /* Gaze table rows */
+  const gazeRows = gazeKeys.map(k =>
+    `<p><strong>${escHtml(k)}</strong> — ${d.gaze_distribution[k]}%</p>`
+  ).join('');
+
+  modalBody.innerHTML = `
     <div class="report-grid">
+      <!-- Focus Block -->
       <div class="report-block">
-        <h3>Session Telemetry</h3>
-        <p>Duration : <strong>${data.session_duration_sec}s</strong></p>
-        <p>Records  : <strong>${data.total_records}</strong></p>
+        <h3>📊 Class Focus Analysis</h3>
+        <p>Duration: <strong>${d.session_duration_sec ?? 0}s</strong></p>
+        <p>Records: <strong>${d.total_records ?? 0}</strong></p>
+        <p>Avg Focus: <strong>${f.mean ?? '—'}%</strong></p>
+        <p>Peak: <strong>${f.max ?? '—'}%</strong> · Min: <strong>${f.min ?? '—'}%</strong></p>
+        <p>Focused: <strong>${f.pct_focused ?? 0}%</strong> · Distracted: <strong>${f.pct_distracted ?? 0}%</strong></p>
+        <p>Drowsy Alerts: <strong style="color:${(d.drowsiness_alerts ?? 0) > 0 ? '#ef4444' : '#10b981'}">${d.drowsiness_alerts ?? 0}</strong></p>
       </div>
+
+      <!-- Emotion / Boredom Block -->
       <div class="report-block">
-        <h3>Focus Algorithm</h3>
-        <p>Mean Focus  : <strong style="color:var(--cyan)">${f.mean}%</strong></p>
-        <p>Distracted  : <strong>${f.pct_distracted}%</strong></p>
+        <h3>🎭 Emotion & Boredom</h3>
+        <p>Peak Emotion: <strong>${escHtml(e.peak ?? '—')}</strong></p>
+        ${Object.entries(e.distribution ?? {}).map(([k,v]) =>
+          `<p>${escHtml(k)}: <strong>${v}%</strong></p>`).join('')}
+        <br>
+        <p>Avg Boredom: <strong>${((b.mean ?? 0)*100).toFixed(1)}%</strong></p>
+        <p>Peak Boredom: <strong>${((b.max ?? 0)*100).toFixed(1)}%</strong></p>
       </div>
+
+      <!-- Gaze Block -->
       <div class="report-block">
-        <h3>Emotion Distribution</h3>
-        <table class="report-table">${distRows}</table>
+        <h3>👁 Gaze Distribution</h3>
+        ${gazeRows || '<p style="color:#4a5280">No gaze data.</p>'}
       </div>
+
+      <!-- Attendance Summary Block -->
       <div class="report-block">
-        <h3>Gaze Distribution</h3>
-        <table class="report-table">${gazeRows}</table>
+        <h3>✅ Attendance Summary</h3>
+        <p>Total Identified: <strong style="color:#10b981">${att.total_present ?? 0} student(s)</strong></p>
       </div>
-    </div>`;
+    </div>
+
+    <!-- Full Attendance Table -->
+    <div class="report-block" style="margin-top:0">
+      <h3>📋 Attendance Sheet</h3>
+      <table class="attendance-table">
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>PRN</th>
+            <th>Status</th>
+            <th>Time Marked</th>
+          </tr>
+        </thead>
+        <tbody>${attRows}</tbody>
+      </table>
+    </div>
+  `;
 }
-
-dom.btnReport.addEventListener("click", async () => {
-  dom.dropdown.classList.add("hidden");
-  dom.modal.classList.remove("hidden");
-  dom.modalBody.innerHTML = '<p class="modal-loading">Loading telemetry report…</p>';
-  try {
-    const r = await fetch("/session_report", { cache: "no-store" });
-    renderReport(await r.json());
-  } catch { dom.modalBody.innerHTML = '<p class="modal-loading">Failed to load.</p>'; }
-});
-
-dom.modalClose.addEventListener("click", () => { dom.modal.classList.add("hidden"); });
-dom.modal.addEventListener("click", e => { if (e.target === dom.modal) dom.modal.classList.add("hidden"); });
-
-dom.btnExport.addEventListener("click", async () => {
-  dom.dropdown.classList.add("hidden");
-  showToast("Exporting CSV…", "info");
-  try {
-    const r = await fetch("/export_session", { method: "POST" });
-    const d = await r.json();
-    showToast(d.status === "ok" ? `Saved: ${d.file}` : "Export failed.", d.status === "ok" ? "success" : "error");
-  } catch { showToast("Export error.", "error"); }
-});
-
-dom.btnExportR.addEventListener("click", async () => {
-  dom.dropdown.classList.add("hidden");
-  showToast("Exporting JSON…", "info");
-  try {
-    const r = await fetch("/export_report", { method: "POST" });
-    const d = await r.json();
-    showToast(d.status === "ok" ? `Saved: ${d.file}` : "Export failed.", d.status === "ok" ? "success" : "error");
-  } catch { showToast("Export error.", "error"); }
-});
-
-dom.btnReset.addEventListener("click", async () => {
-  dom.dropdown.classList.add("hidden");
-  if (!confirm("Clear the session log? This cannot be undone.")) return;
-  try {
-    await fetch("/reset_session", { method: "POST" });
-    scoreHistory.length = 0;
-    chartData.labels  = [];
-    chartData.datasets.forEach(ds => ds.data = []);
-    focusChart.update();
-    showToast("Session telemetry cleared.", "success");
-  } catch { showToast("Reset error.", "error"); }
-});
-
-// START
-poll();
-setInterval(poll, 900);

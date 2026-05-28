@@ -14,12 +14,23 @@ Author  : Smart Classroom AI
 Version : 2.0.0  (Phase 1.5)
 """
 
+import json
+import time
 import threading
-from flask import Flask, Response, render_template, jsonify
-from camera import VideoCamera
+from flask import Flask, Response, render_template, jsonify, stream_with_context
+from camera import VideoCamera, list_available_cameras
 
 app    = Flask(__name__)
-camera = VideoCamera(camera_index=0)
+
+try:
+    camera = VideoCamera(camera_index=0)   # index 0 = currently active webcam
+except RuntimeError as e:
+    print(f"\n{'='*55}")
+    print(f" ERROR: {e}")
+    print(f" Connect your webcam and restart the server.")
+    print(f"{'='*55}\n")
+    raise
+
 _lock  = threading.Lock()
 
 
@@ -52,13 +63,42 @@ def video_feed():
 @app.route("/data_stream")
 def data_stream():
     """
-    Live metrics polled by the frontend every ~1 second.
+    Server-Sent Events stream that pushes live classroom metrics every 1 s.
 
-    Response fields (Phase 1.5):
-      status, emotion, focus_score, ear, yaw, pitch, roll,
-      gaze, gaze_h, gaze_v, boredom, fps
+    The browser connects once via EventSource('/data_stream') and receives
+    a continuous push of JSON metric objects, eliminating the need for
+    repeated polling requests.
+
+    Event format (parsed by script.js applyMetrics):
+      event: metrics
+      data: {face_count, focus_score, emotion, gaze_state, boredom, fps, ...}
     """
-    return jsonify(camera.get_metrics())
+    def _generate():
+        while True:
+            try:
+                metrics = camera.get_metrics()
+                payload = json.dumps(metrics)
+                # SSE format: event name + data line + blank line terminator
+                yield f"event: metrics\ndata: {payload}\n\n"
+            except Exception as e:
+                yield f"event: error\ndata: {{\"msg\": \"{e}\"}}\n\n"
+            time.sleep(1.0)
+
+    return Response(
+        stream_with_context(_generate()),
+        mimetype="text/event-stream",
+        headers={
+            "Cache-Control" : "no-cache",
+            "X-Accel-Buffering": "no",    # disable nginx buffering if proxied
+        },
+    )
+
+
+@app.route("/cameras")
+def cameras():
+    """List available webcam indices on this machine."""
+    available = list_available_cameras()
+    return jsonify({"available_cameras": available})
 
 
 @app.route("/session_report")
@@ -66,9 +106,23 @@ def session_report():
     """
     On-demand session summary for the Research Paper Results section.
     Returns JSON with focus stats, drowsiness alerts, gaze distribution,
-    emotion distribution, and boredom metrics.
+    emotion distribution, boredom metrics, and attendance roster.
     """
     return jsonify(camera.get_session_report())
+
+
+@app.route("/attendance_live")
+def attendance_live():
+    """Lightweight endpoint: returns only the live attendance roster.
+
+    Polled by the frontend every ~3 s to update the roster panel without
+    triggering the full session-report computation.
+    """
+    roster = camera.logger.attendance_roster
+    return jsonify({
+        "total_present": len(roster),
+        "students":      roster,
+    })
 
 
 @app.route("/export_session", methods=["POST"])
